@@ -1,0 +1,8 @@
+streamlit
+pypdf
+chromadb
+sentence-transformers
+google-generativeai
+tavily-python
+pysqlite3-binary
+pandas
