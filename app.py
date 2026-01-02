@@ -1,4 +1,4 @@
-# --- 1. SYSTEM-FIX FÖR CHROMADB (Streamlit Cloud kompatibilitet) ---
+# --- 1. SYSTEM-FIX FÖR CHROMADB ---
 try:
     __import__('pysqlite3')
     import sys
@@ -22,25 +22,20 @@ st.set_page_config(
     layout="wide"
 )
 
-# Funktion för att koda bilden till base64 så den kan ligga inline med texten
 def get_image_base64(path):
     if os.path.exists(path):
         with open(path, "rb") as img_file:
             return base64.b64encode(img_file.read()).decode()
     return None
 
-# CSS för Mobilanpassning och Layout
 st.markdown("""
 <style>
-    /* Förhindra sidledsskroll på mobila enheter */
     .main .block-container {
         max-width: 100%;
         padding-left: 1rem;
         padding-right: 1rem;
         overflow-x: hidden;
     }
-
-    /* Header: Logga och Rubrik på samma rad */
     .custom-header {
         display: flex;
         align-items: center;
@@ -48,20 +43,13 @@ st.markdown("""
         margin-top: -30px;
         margin-bottom: 20px;
     }
-    
-    .logo-img {
-        width: 50px; /* Liten logga för att rymmas på mobil */
-        height: auto;
-    }
-    
+    .logo-img { width: 50px; height: auto; }
     .header-title {
         font-size: 1.4rem !important;
         margin: 0;
         font-weight: 800;
         color: #1E1E1E;
     }
-
-    /* Nyhetsboxen: Ersätter den blå st.info boxen */
     .news-box {
         background-color: #ffffff;
         border: 1px solid #e0e0e0;
@@ -70,11 +58,14 @@ st.markdown("""
         border-radius: 8px;
         margin-top: 10px;
         font-size: 0.95rem;
-        line-height: 1.5;
-        word-wrap: break-word; /* Tvingar textbrytning för att undvika skroll */
+        line-height: 1.6;
+        word-wrap: break-word;
     }
-
-    /* Responsivitet för extra små skärmar */
+    .source-link {
+        color: #007BFF;
+        text-decoration: none;
+        font-size: 0.85rem;
+    }
     @media (max-width: 480px) {
         .header-title { font-size: 1.1rem !important; }
         .logo-img { width: 40px; }
@@ -82,35 +73,33 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- HEADER (Logga + Rubrik) ---
+# --- HEADER ---
 logo_path = "zebra_logo.png" if os.path.exists("zebra_logo.png") else "zebra_logo.PNG"
 img_b64 = get_image_base64(logo_path)
 
 if img_b64:
-    st.markdown(f"""
-    <div class="custom-header">
-        <img src="data:image/png;base64,{img_b64}" class="logo-img">
-        <h1 class="header-title">Pots-EDS-Experten</h1>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f'<div class="custom-header"><img src="data:image/png;base64,{img_b64}" class="logo-img"><h1 class="header-title">Pots-EDS-Experten</h1></div>', unsafe_allow_html=True)
 else:
     st.markdown('<div class="custom-header"><h1 class="header-title">Pots-EDS-Experten</h1></div>', unsafe_allow_html=True)
 
 st.markdown("---")
 
-# --- 3. KUNSKAPSBAS (RAG) LOGIK ---
-DB_PATH = "chroma_db"
-KB_FOLDER = "knowledge_base" 
-
+# --- 3. OPTIMERAD KUNSKAPSBAS (RAG) ---
+# Vi använder @st.cache_resource så att indexeringen bara sker en gång per serverstart
+@st.cache_resource
 def initialize_rag():
+    DB_PATH = "chroma_db"
+    KB_FOLDER = "knowledge_base"
     client = chromadb.PersistentClient(path=DB_PATH)
     emb_fn = embedding_functions.DefaultEmbeddingFunction()
     collection = client.get_or_create_collection(name="eds_pots_docs", embedding_function=emb_fn)
     
+    # Indexera bara om databasen är tom
     if collection.count() == 0 and os.path.exists(KB_FOLDER):
-        with st.spinner("Indexerar forskning..."):
-            for filename in os.listdir(KB_FOLDER):
-                if filename.endswith(".pdf"):
+        pdf_files = [f for f in os.listdir(KB_FOLDER) if f.endswith(".pdf")]
+        if pdf_files:
+            with st.spinner("Optimerar och läser in forskningsdatabasen..."):
+                for filename in pdf_files:
                     try:
                         path = os.path.join(KB_FOLDER, filename)
                         reader = PdfReader(path)
@@ -119,43 +108,44 @@ def initialize_rag():
                         ids = [f"{filename}_{i}" for i in range(len(chunks))]
                         metadatas = [{"source": filename} for _ in range(len(chunks))]
                         collection.add(documents=chunks, ids=ids, metadatas=metadatas)
-                    except: continue
+                    except Exception: continue
     return collection
 
 # --- 4. AI & SÖK LOGIK ---
 def get_latest_updates():
+    # Sökning anpassad för 2025/2026
     query = "latest clinical research findings EDS Ehlers-Danlos POTS Syndrome 2025 2026"
     web_context = ""
     try:
         tavily = TavilyClient(api_key=st.secrets["TAVILY_API_KEY"])
         web_search = tavily.search(query=query, search_depth="advanced", max_results=5, topic="news")
         
-        # Samlar informationen och inkluderar publiceringsdatumet från webben
+        # Formatera kontexten med tydliga käll-URL:er
         web_context = "\n".join([
-            f"Källa: {r['url']}\nWEBBPULICERINGSDATUM: {r.get('published_date', 'Datum saknas i källan')}\nInnehåll: {r['content']}" 
+            f"KÄLLA: {r['url']}\nDATUM: {r.get('published_date', 'Datum saknas')}\nINNEHÅLL: {r['content']}" 
             for r in web_search['results']
         ])
     except:
-        st.warning("Kunde inte ansluta till webbsökning.")
+        return "Kunde inte hämta nyheter just nu. Kontrollera internetanslutningen."
 
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     model = genai.GenerativeModel("models/gemini-2.5-flash")
     
     prompt = f"""
-    Du är en medicinsk expertassistent. Sammanfatta de senaste nyheterna inom EDS och POTS.
+    Du är en medicinsk expert. Sammanfatta de senaste nyheterna inom EDS och POTS från 2025-2026.
     
-    VIKTIGT OM DATUM: 
-    För varje punkt måste du ange källans PUBLICERINGSDATUM (det datum nyheten lades ut på nätet). 
-    Använd INTE dagens datum. Om datumet saknas i källan, skriv "Publiceringsdatum ej angivet".
+    INSTRUKTIONER FÖR KÄLLOR:
+    För varje punkt du skriver MÅSTE du avsluta med en tydlig källhänvisning som innehåller URL:en.
+    Exempel: "Källa: [Namn på sida](URL)"
+    
+    DATUM:
+    Ange det ursprungliga publiceringsdatumet från webben för varje nyhet.
     
     INFORMATION:
     {web_context}
     
-    INSTRUKTIONER:
-    1. Svara på svenska.
-    2. Använd en punktlista.
-    3. Ta bort alla ikoner som megafoner eller liknande.
-    4. Avsluta med en kort medicinsk ansvarsfriskrivning.
+    Skriv på svenska, använd punktlista och ta inte med några ikoner/emojis i sammanfattningen.
+    Avsluta med medicinsk ansvarsfriskrivning.
     """
     response = model.generate_content(prompt)
     return response.text
@@ -168,41 +158,39 @@ def perform_ai_analysis(query, collection):
     web_context = ""
     try:
         tavily = TavilyClient(api_key=st.secrets["TAVILY_API_KEY"])
-        web_search = tavily.search(query=f"medical study {query} POTS EDS", max_results=3)
-        web_context = "\n".join([f"Källans Datum: {r.get('published_date', 'N/A')} - {r['content']}" for r in web_search['results']])
+        web_search = tavily.search(query=f"clinical study 2025 {query} POTS EDS", max_results=3)
+        web_context = "\n".join([f"Källa: {r['url']} (Datum: {r.get('published_date', 'N/A')}) - {r['content']}" for r in web_search['results']])
     except: pass
 
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     model = genai.GenerativeModel("models/gemini-2.5-flash")
     
     prompt = f"""
-    Svara pedagogiskt på svenska på: {query}
-    LOKAL FORSKNING: {local_context}
-    NYA WEBB-RÖN: {web_context}
+    Svara på svenska på: {query}
+    ANVÄND LOKAL DATA: {local_context}
+    ANVÄND WEBB-DATA: {web_context}
     
-    Ange alltid publiceringsdatum när du nämner nya webbrön. 
-    Avsluta med ansvarsfriskrivning.
+    När du använder webbinformation, ange alltid källans URL och publiceringsdatum.
+    Avsluta med medicinsk ansvarsfriskrivning.
     """
     response = model.generate_content(prompt)
     return response.text, sources
 
 # --- 5. MAIN APP ---
 def main():
+    # Starta kunskapsbasen (snabb tack vare cache)
     collection = initialize_rag()
     
-    # Nyhetsknapp
     if st.button("✨ Hämta senaste uppdateringarna inom EDS/POTS"):
-        with st.spinner("Hämtar rön..."):
+        with st.spinner("Hämtar senaste rön och källor..."):
             latest_info = get_latest_updates()
             st.markdown("### Senaste nytt")
-            # Visas i en ren box utan ikoner och utan sidledsskroll
             st.markdown(f'<div class="news-box">{latest_info}</div>', unsafe_allow_html=True)
             st.markdown("---")
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Chat-logik
     for m in st.session_state.messages:
         with st.chat_message(m["role"]):
             st.markdown(m["content"])
@@ -211,11 +199,11 @@ def main():
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"): st.markdown(prompt)
         with st.chat_message("assistant"):
-            with st.spinner("Analyserar..."):
+            with st.spinner("Analyserar forskning..."):
                 res, src = perform_ai_analysis(prompt, collection)
                 st.markdown(res)
                 if src:
-                    with st.expander("Se källor"):
+                    with st.expander("Se lokala PDF-källor"):
                         for s in src: st.write(f"📄 {s}")
         st.session_state.messages.append({"role": "assistant", "content": res})
 
