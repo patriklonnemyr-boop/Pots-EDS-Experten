@@ -96,7 +96,7 @@ def get_latest_updates(collection):
 
     # 2. Generera sammanfattning med Gemini
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.0-flash-exp')
     
     prompt = f"""
     Du är Pots-EDS-Experten. Sammanfatta de viktigaste senaste nyheterna inom EDS (Ehlers-Danlos syndrom) och POTS baserat på följande information.
@@ -134,7 +134,7 @@ def perform_ai_analysis(query, collection):
 
     # 3. Generera svar med Gemini
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-1.5-flash') # Gemini 2.5 Flash i prompten men ofta gemini-1.5-flash i API:et just nu
+    model = genai.GenerativeModel('gemini-2.0-flash-exp')
     
     prompt = f"""
     Du är Pots-EDS-Experten, en medicinsk forskningsassistent specialiserad på Ehlers-Danlos syndrom och POTS.
